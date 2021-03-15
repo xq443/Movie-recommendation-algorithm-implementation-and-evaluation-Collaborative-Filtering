@@ -1,0 +1,300 @@
+---
+title: "ALS + post processing"
+author: "Ziyang Zhang"
+date: "4/18/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+#installed.packages("remotes")
+remotes::install_github("TimothyKBook/krr")
+#installed.packages("krr")
+library(krr)
+library(dplyr)
+library(caret)
+```
+
+
+# A3 with 10 factors
+```{r}
+#read output and data
+train_set <- read.csv("../data/train_set.csv")
+test_set<- read.csv("../data/test_set.csv")
+q<-read.csv("../output/A3_q_f10.csv",header= FALSE)
+```
+
+
+
+```{r}
+dim(rating.a3)
+```
+
+
+```{r}
+rating.a3<-t(rating.a3)
+```
+
+
+```{r}
+dim(rating.a3)
+```
+
+## Prepare for kernel ridge regression input
+
+We need to transform the results from ALS to the form that we can put into kernel ridge regression. 
+
+First, we should split rating data for 610 users since we should do krr for different users.
+
+Second, each column of q matrix from ALS represents a movie. We should etract certain column of q matrix corresponding to the movie(movieid) users rating and then combine them to build 610 different transformed new q matrices. 
+
+Finally, we need to normalize each row.
+
+
+```{r}
+train_split <- split(train_set,train_set$userId)
+n <- length(train_split)
+movie <- as.vector(unlist(c(q[1,])))
+
+### Define function to normalize each row
+norm.row <- function(m){
+  return(m/sqrt(sum(m^2)))
+}
+
+q <- as.matrix(q[-1,])
+
+new_q_split <- list()
+
+for (k in 1:n){
+  new <- c()
+  for (i in 1:dim(train_split[[k]])[1]){
+    new<-cbind(new,q[,which(movie == train_split[[k]]$movieId[i])])}
+    new_q_split[[k]]<-new
+}
+
+q_t <- apply(q,2,norm.row)
+q_t[which(is.na(q_t))] <- 0
+
+x_split<-list()
+for (k in 1: n){
+  x_split[[k]]<-apply(new_q_split[[k]],2,norm.row)
+}
+
+data_split<-list()
+for (k in 1:n){
+  data_split[[k]] <- cbind(train_split[[k]]$rating,t(x_split[[k]]))
+}
+
+```
+
+
+### save data_split
+```{r}
+save(data_split,file = "../output/data_split1.RData")
+
+```
+
+
+## Tuning parameter for kernel ridge regression
+
+We set the Gaussian kernel: $K(x_i^{T},x_j^{T}) = exp(2(x_i^{T}x_j - 1))$ as the paper said and we'll use k-folds cross validation to get the value of parameter $\lambda$
+
+```{r}
+source("../lib/cv.krr.R")
+#find a best lambda
+lambdas <- c(0.7, 0.8, 0.9)
+rmse_tune <- data.frame(lambdas=c(0.7,0.8,0.9),rmse=rep(0,length(lambdas)))
+for (i in 1:length(lambdas)){
+  m <- lapply(data_split, cv.krr, 5, lambdas[i])
+  rmse_tune[i,2] <-  sum(unlist(m))
+}
+
+rmse_tune
+```
+
+
+## Train kernel ridge regression and get prediction
+From the result above, we could see that 0.7 is the best value for $\lambda$ with the lowest RSME. As a result, we will use 0.7 to train 610 KRR for 610 users.
+
+```{r}
+n <- length(data_split)
+### Each user has his KRR model. 
+
+train_model_f10 <- vector(mode="list",length=n)
+for(i in 1:n){
+   train_model_f10[[i]] <- krr(x = data_split[[i]][,-1],
+                           y = data_split[[i]][,1],
+                           lambda = 0.7)
+}
+
+pred.rating_f10<-matrix(0,nrow=length(data_split),ncol=dim(q)[2])
+
+for (i in 1:n){
+  pred.rating_f10[i,] <- predict(train_model_f10[[i]],t(q_t))
+}
+```
+
+
+## Evaluation
+Calculate test RMSE
+```{r}
+RMSE(train_set$rating, pred.rating_f10)  # 1.904537
+RMSE(test_set$rating, pred.rating_f10)  # 1.90248
+```
+
+
+
+
+"A3_q_f50.csv"
+```{r}
+q_50 <- read.csv("../output/A3_q_f50.csv",header= FALSE)
+
+movie <- as.vector(unlist(c(q_50[1,])))
+
+n <- length(train_split)
+q_50 <- as.matrix(q_50[-1,])
+new_q_split <- list()
+for (k in 1:n){
+  new <- c()
+for (i in 1:dim(train_split[[k]])[1]){
+  new<-cbind(new,q_50[,which(movie == train_split[[k]]$movieId[i])])}
+  new_q_split[[k]]<-new
+}
+
+q_t_50 <- apply(q_50,2,norm.row)
+q_t_50[which(is.na(q_t_50))] <- 0
+x_split<-list()
+
+for (k in 1: n){
+  x_split[[k]]<-apply(new_q_split[[k]],2,norm.row)
+}
+
+data_split_50<-list()
+
+for (k in 1:n){
+  data_split_50[[k]] <- cbind(train_split[[k]]$rating,t(x_split[[k]]))
+}
+
+rmse_tune <- data.frame(lambdas = c(0.55,0.6,0.65),rmse=rep(0,length(lambdas)))
+
+for (i in 1:length(lambdas)){
+  m <- lapply(data_split_50, 
+              cv.krr, 
+              5, 
+              lambdas[i])
+  rmse_tune[i,2] <-  sum(unlist(m))
+}
+rmse_tune
+
+# The best lambda is 0.55. 
+n <- length(data_split_50)
+
+```
+
+```{r}
+### Each user has his KRR model. 
+train_model_f50 <- vector(mode="list",length=n)
+for(i in 1:n){
+   train_model_f50[[i]] <- krr(x = data_split_50[[i]][,-1],
+                           y = data_split_50[[i]][,1],
+                           lambda = 0.55)
+}
+pred.rating_f50<-matrix(0,nrow=length(data_split_50),ncol=dim(q_50)[2])
+for (i in 1:n){
+  pred.rating_f50[i,] <- predict(train_model_f50[[i]],t(q_t_50))
+}
+```
+
+1. 算f=50的test rmse
+2. 算f=10的train rmse
+
+## Evaluation by RMSE
+```{r}
+RMSE(train_set$rating, pred.rating_f50)  # 1.709299
+RMSE(test_set$rating, pred.rating_f50)  # 1.705701
+```
+
+
+
+
+
+## A3 with 100 factors
+"A3_q_f100.csv"
+```{r}
+q_100 <- read.csv("../output/A3_q_f100.csv",header= FALSE)
+
+movie <- as.vector(unlist(c(q_100[1,])))
+
+n <- length(train_split)
+q_100 <- as.matrix(q_100[-1,])
+new_q_split <- list()
+for (k in 1:n){
+  new <- c()
+for (i in 1:dim(train_split[[k]])[1]){
+  new<-cbind(new,q_100[,which(movie == train_split[[k]]$movieId[i])])}
+  new_q_split[[k]]<-new
+}
+
+q_t_100 <- apply(q_100,2,norm.row)
+q_t_100[which(is.na(q_t_100))] <- 0
+x_split<-list()
+
+for (k in 1: n){
+  x_split[[k]]<-apply(new_q_split[[k]],2,norm.row)
+}
+
+data_split_100<-list()
+
+for (k in 1:n){
+  data_split_100[[k]] <- cbind(train_split[[k]]$rating,t(x_split[[k]]))
+}
+
+rmse_tune <- data.frame(lambdas = c(0.55,0.6,0.65),rmse=rep(0,length(lambdas)))
+
+for (i in 1:length(lambdas)){
+  m <- lapply(data_split_100, 
+              cv.krr, 
+              5, 
+              lambdas[i])
+  rmse_tune[i,2] <-  sum(unlist(m))
+}
+rmse_tune
+
+# The best lambda is 0.5
+n <- length(data_split_100)
+
+```
+
+```{r}
+### Each user has his KRR model. 
+train_model_f100 <- vector(mode="list",length=n)
+for(i in 1:n){
+   train_model_f100[[i]] <- krr(x = data_split_100[[i]][,-1],
+                           y = data_split_100[[i]][,1],
+                           lambda = 0.5)
+}
+
+pred.rating_f100<-matrix(0,nrow=length(data_split_100),ncol=dim(q_100)[2])
+for (i in 1:n){
+  pred.rating_f100[i,] <- predict(train_model_f100[[i]],t(q_t_100))
+}
+```
+
+
+## Evaluation by RMSE
+```{r}
+RMSE(train_set$rating, pred.rating_f100)  # 1.695593
+RMSE(test_set$rating, pred.rating_f100)  #  1.691776
+```
+
+
+
+
+
+
+

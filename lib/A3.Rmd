@@ -1,0 +1,144 @@
+---
+title: "A3"
+author: "Ziyang Zhang"
+date: "4/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Step 1 Load Data and Train-test Split
+```{r}
+# rm(list=ls())
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+setwd("~/Desktop/2nd Semester/5243 ADS/Spring2020-Project4-spring2020-project4-group3/data/")
+data <- read.csv("ml-latest-small/ratings.csv")
+set.seed(0)
+test_idx <- sample(1:nrow(data), round(nrow(data)/5, 0))
+train_idx <- setdiff(1:nrow(data), test_idx)
+train_set <- data[train_idx, ]
+test_set <- data[test_idx, ]
+write.csv(train_set,file="train_set.csv",row.names = F)
+write.csv(test_set, file = "test_set.csv", row.names = F)
+data_train <- read.csv("train_set.csv")
+data_test <- read.csv("test_set.csv")
+```
+
+```{r}
+U <- length(unique(data$userId))
+I <- length(unique(data$movieId))
+source("../lib/ALS.R")
+```
+
+```{r}
+#Define a function to calculate RMSE
+RMSE <- function(rating, est_rating){
+  sqr_err <- function(obs){
+    sqr_error <- (obs[3] - est_rating[as.character(obs[1]), as.character(obs[2])])^2
+    return(sqr_error)
+  }
+  return(sqrt(mean(apply(rating, 1, sqr_err))))  
+}
+
+ALS <- function(f = 10, lambda = 5, max.iter=20, data, train=data_train, test=data_test) {
+  
+  # Initialize Movie Matrix and User Matrix
+  Movie <- matrix(runif(f*I, -1, 1), ncol = I)
+  colnames(Movie) <- levels(as.factor(data$movieId))
+  movie.average <- data %>% group_by(movieId) %>% summarize(ave=mean(rating))
+  Movie[1,] <- movie.average$ave
+  
+  
+  User <- matrix(runif(f*U, -1, 1), ncol = U) 
+  colnames(User) <- levels(as.factor(data$userId))
+  
+  
+  movie.id <- sort(unique(data$movieId))
+  train_RMSE <- c()
+  test_RMSE <- c()
+  
+  for (l in 1:max.iter){
+  
+  # Step2: Fix M, Solve U
+  for (u in 1:U) {
+    
+    User[,u] <- solve (Movie[,as.character(train[train$userId==u,]$movieId)] %*%
+      t(Movie[,as.character(train[train$userId==u,]$movieId)]) + lambda * diag(f)) %*%
+      Movie[,as.character(train[train$userId==u,]$movieId)] %*% train[train$userId==u,]$rating}
+    
+    
+  # Step3: Fix U, Solve M  
+  for (i in 1:I) {
+    Movie[,i] <- solve (User[,train[train$movieId==movie.id[i],]$userId] %*% 
+      t(User[,train[train$movieId==movie.id[i],]$userId]) + lambda * diag(f)) %*%
+      User[,train[train$movieId==movie.id[i],]$userId] %*% train[train$movieId==movie.id[i],]$rating
+    
+  }
+    
+    
+    # Summerize
+    cat("iter:", l, "\t")
+    est_rating <- t(User) %*% Movie 
+    colnames(est_rating) <- levels(as.factor(data$movieId))
+    
+    train_RMSE_cur <- RMSE(train, est_rating)
+    cat("training RMSE:", train_RMSE_cur, "\t")
+    train_RMSE <- c(train_RMSE, train_RMSE_cur)
+    
+    test_RMSE_cur <- RMSE(test, est_rating)
+    cat("test RMSE:",test_RMSE_cur, "\n")
+    test_RMSE <- c(test_RMSE, test_RMSE_cur)
+    
+  } 
+  ratings<-t(as.matrix(User))%*%as.matrix(Movie)
+  return(list(p = User, q = Movie, r= ratings, train_RMSE = train_RMSE, test_RMSE = test_RMSE))
+}
+```
+
+In order to apply the ALS algorithm, we write a function that do the minimization of the loss function. We take the derivative of the loss function and set it to zero. Then we alternatively fix p or q to solve for the other.  Since we are working with matrix, so the first step is to initilize a matrix for movies and users. Then we solve of p and q alternatively by fixing the other and set the derivative of loss function to zero. Then we get the RMSE by tuning different lambda and factors.
+
+```{r}
+#the r matrix and q matrix for factor of 10, lambda of 5 and RMSE
+als1= ALS(f = 10, lambda = 5, max.iter=10, data, train=data_train, test=data_test)
+mat1= als1$q
+mat2=t(as.matrix(als1$p))%*%as.matrix(als1$q)
+mat2.2 =t(as.matrix(als1$q))%*%as.matrix(als1$p)
+
+write.csv(mat1, file = "../output/A3_q_dim10.csv")
+write.csv(mat2.2, file = "../output/A3_r_dim10.csv")
+```
+
+```{r}
+#the r matrix and q matrix for factor of 50, lambda of 5 and RMSE
+als2= ALS(f = 50, lambda = 5, max.iter=10, data, train=data_train, test=data_test)
+mat3= als2$q
+mat4=t(as.matrix(als2$p))%*%as.matrix(als2$q)
+write.csv(mat3, file = "../output/A3_q_dim50.csv")
+write.csv(mat4, file =  "../output/A3_r_dim50.csv")
+```
+
+```{r}
+#the r matrix and q matrix for factor of 100, lambda of 5 and RMSE
+als3= ALS(f = 100, lambda = 5, max.iter=10, data, train=data_train, test=data_test)
+mat5= als3$q
+mat6=t(as.matrix(als3$p))%*%as.matrix(als3$q)
+write.csv(mat5, file =  "../output/A3_q_dim100.csv")
+write.csv(mat6, file =  "../output/A3_r_dim100.csv")
+```
+
+
+```{r}
+#plot out the result
+library(ggplot2)
+#result= ALS(f = 100, lambda = 5, max.iter=10, data, train=data_train, test=data_test)
+als <- c(als1,als2,als3)
+RMSE1 <- data.frame(epochs = seq(10, 100, 10), Training_MSE =als$train_RMSE, Test_MSE = als$test_RMSE) %>% gather(key = train_or_test, value = RMSE, -epochs)
+RMSE1 %>% ggplot(aes(x = epochs, y = RMSE,col = train_or_test)) + geom_point() + scale_x_discrete(limits = seq(10, 100, 10)) + xlim(c(0, 100))
+```
+
+From above, we can tell that the MSE for Test data and Training data decreases in overall. For the RMSE of training data is much more steep. I think the overall decrease of the RMSE does show good result for ALS. 
